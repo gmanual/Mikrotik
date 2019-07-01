@@ -1,27 +1,25 @@
-# jun/26/2019  8:30:44 by RouterOS 6.44.3
-# software id = ZNAS-V9CY
-#
             script: :global ssid;
                     #| RouterMode:
                     #|  * WAN port is protected by firewall and enabled DHCP client
-                    #|  * Wireless and Ethernet interfaces (except WAN port ether1)
+                    #|  * Wireless and Ethernet interfaces (except WAN port/s)
                     #|    are part of LAN bridge
+                    #| LAN Configuration:
+                    #|     IP address 192.168.88.1/24 is set on bridge (LAN port)
+                    #|     DHCP Server: enabled;
+                    #|     DNS: enabled;
                     #| wlan1 Configuration:
                     #|     mode:                ap-bridge;
                     #|     band:                2ghz-b/g/n;
                     #|     tx-chains:           0;1;
                     #|     rx-chains:           0;1;
+                    #|     installation:        indoor;
                     #|     ht-extension:        20/40mhz-XX;
-                    #| LAN Configuration:
-                    #|     IP address 192.168.88.1/24 is set on bridge (LAN port)
-                    #|     DHCP Server: enabled;
                     #| WAN (gateway) Configuration:
                     #|     gateway:  ether1 ;
                     #|     ip4 firewall:  enabled;
                     #|     NAT:   enabled;
                     #|     DHCP Client: enabled;
-                    #|     DNS: enabled;
-
+                    
                     :global defconfMode;
                     :log info Starting_defconf_script_;
                     #-------------------------------------------------------------------------------
@@ -29,16 +27,15 @@
                     # these commands are executed after installation or configuration reset
                     #-------------------------------------------------------------------------------
                     :if ($action = "apply") do={
-                    # wait for interfaces
-                    :local count 0; 
-                    :while ([/interface ethernet find] = "") do={ 
-                    :if ($count = 30) do={
-                    :log warning "DefConf: Unable to find ethernet interfaces";
-                    /quit;
-                    }
-                    :delay 1s; :set count ($count +1); 
-                    };
-
+                      # wait for interfaces
+                      :local count 0;
+                      :while ([/interface ethernet find] = "") do={
+                        :if ($count = 30) do={
+                          :log warning "DefConf: Unable to find ethernet interfaces";
+                          /quit;
+                        }
+                        :delay 1s; :set count ($count +1); 
+                      };
                       :local count 0;
                       :while ([/interface wireless print count-only] < 1) do={ 
                         :set count ($count +1);
@@ -49,15 +46,6 @@
                         }
                         :delay 1s;
                       };
-                      /interface wireless {
-                        set wlan1 mode=ap-bridge band=2ghz-b/g/n disabled=no wireless-protocol=802.11 \
-                           distance=indoors 
-                        set wlan1 channel-width=20/40mhz-XX;
-                        set wlan1 frequency=auto
-                        :local wlanMac  [/interface wireless get wlan1 mac-address];
-                        :set ssid "MikroTik-$[:pick $wlanMac 9 11]$[:pick $wlanMac 12 14]$[:pick $wlanMac 15 17]"
-                        set wlan1 ssid=$ssid
-                      }
                      /interface list add name=WAN comment="defconf"
                      /interface list add name=LAN comment="defconf"
                      /interface bridge
@@ -81,6 +69,20 @@
                        /ip dhcp-server network
                          add address=192.168.88.0/24 gateway=192.168.88.1 comment="defconf";
                       /ip address add address=192.168.88.1/24 interface=bridge comment="defconf";
+                     /ip dns {
+                         set allow-remote-requests=yes
+                         static add name=router.lan address=192.168.88.1 comment=defconf
+                     }
+                    
+                      /interface wireless {
+                        set wlan1 mode=ap-bridge band=2ghz-b/g/n disabled=no wireless-protocol=802.11 \
+                           distance=indoors installation=indoor
+                        set wlan1 channel-width=20/40mhz-XX;
+                        set wlan1 frequency=auto
+                        :local wlanMac  [/interface wireless get wlan1 mac-address];
+                        :set ssid "MikroTik-$[:pick $wlanMac 9 11]$[:pick $wlanMac 12 14]$[:pick $wlanMac 15 17]"
+                        set wlan1 ssid=$ssid
+                      }
                        /ip dhcp-client add interface=ether1 disabled=no comment="defconf";
                      /interface list member add list=LAN interface=bridge comment="defconf"
                      /interface list member add list=WAN interface=ether1 comment="defconf"
@@ -89,22 +91,18 @@
                        filter add chain=input action=accept connection-state=established,related,untracked comment="defconf: accept established,related,untracked"
                        filter add chain=input action=drop connection-state=invalid comment="defconf: drop invalid"
                        filter add chain=input action=accept protocol=icmp comment="defconf: accept ICMP"
+                       filter add chain=input action=accept dst-address=127.0.0.1 comment="defconf: accept to local loopback (for CAPsMAN)"
                        filter add chain=input action=drop in-interface-list=!LAN comment="defconf: drop all not coming from LAN"
                        filter add chain=forward action=accept ipsec-policy=in,ipsec comment="defconf: accept in ipsec policy"
                        filter add chain=forward action=accept ipsec-policy=out,ipsec comment="defconf: accept out ipsec policy"
                        filter add chain=forward action=fasttrack-connection connection-state=established,related comment="defconf: fasttrack"
                        filter add chain=forward action=accept connection-state=established,related,untracked comment="defconf: accept established,related, untracked"
                        filter add chain=forward action=drop connection-state=invalid comment="defconf: drop invalid"
-                       filter add chain=forward action=drop connection-state=new connection-nat-state=!dstnat in-interface-list=WAN comment="defconf:  drop all from WAN not DSTNATed"
+                       filter add chain=forward action=drop connection-state=new connection-nat-state=!dstnat in-interface-list=WAN comment="defconf: drop all from WAN not DSTNATed"
                      }
                        /ip neighbor discovery-settings set discover-interface-list=LAN
                        /tool mac-server set allowed-interface-list=LAN
                        /tool mac-server mac-winbox set allowed-interface-list=LAN
-                     /ip dns {
-                         set allow-remote-requests=yes
-                         static add name=router.lan address=192.168.88.1
-                     }
-
                     }
                     #-------------------------------------------------------------------------------
                     # Revert configuration.
@@ -138,7 +136,7 @@
                        :if ([:len $o] != 0) do={ /ip dhcp-client remove $o }
                      /ip dns {
                        set allow-remote-requests=no
-                       :local o [static find name=router.lan address=192.168.88.1]
+                       :local o [static find comment="defconf"]
                        :if ([:len $o] != 0) do={ static remove $o }
                      }
                      /ip address {
@@ -150,35 +148,40 @@
                      }
                      /interface bridge port remove [find comment="defconf"]
                      /interface bridge remove [find comment="defconf"]
+                     /interface wireless cap set enabled=no interfaces="" caps-man-addresses=""
                      /interface wireless reset-configuration wlan1
-                      /interface wireless security-profiles remove [find name="wpsSync"]
+                      /caps-man manager set enabled=no
+                      /caps-man manager interface remove [find comment="defconf"]
+                      /caps-man manager interface set [ find default=yes ] forbid=no
+                      /caps-man provisioning remove [find comment="defconf"]
+                      /caps-man configuration remove [find comment="defconf"]
                     }
                     :log info Defconf_script_finished;
                     :set defconfMode;
                     :set ssid;
-
+                    
   caps-mode-script: #-------------------------------------------------------------------------------
                     # Note: script will not execute at all (will throw a syntax error) if
                     #       dhcp or wireless-fp packages are not installed
                     #-------------------------------------------------------------------------------
-
+                    
                     #| CAP configuration
                     #|
                     #|   Wireless interfaces are set to be managed by CAPsMAN.
                     #|   All ethernet interfaces and CAPsMAN managed interfaces are bridged.
                     #|   DHCP client is set on bridge interface.
-
+                    
                     # bridge port name
                     :global brName  "bridgeLocal";
                     :global logPref "defconf:";
-
-
+                    
+                    
                     :global action;
-
+                    
                     :log info $action
-
+                    
                     :if ($action = "apply") do={
-
+                    
                       # wait for ethernet interfaces
                       :local count 0;
                       :while ([/interface ethernet find] = "") do={
@@ -188,10 +191,10 @@
                         }
                         :delay 1s; :set count ($count + 1);
                       }
-
+                    
                       :local macSet 0;
                       :local tmpMac "";
-
+                    
                       :foreach k in=[/interface ethernet find] do={
                         # first ethernet is found; add bridge and set mac address of the ethernet port
                         :if ($macSet = 0) do={
@@ -202,17 +205,17 @@
                         # add bridge ports
                         /interface bridge port add bridge=$brName interface=$k comment="defconf"
                       }
-
+                    
                       # try to add dhcp client on bridge interface (may fail if already exist)
                       :do {
                         /ip dhcp-client add interface=$brName disabled=no comment="defconf"
                       } on-error={ :log warning "$logPref unable to add dhcp client";}
-
-
+                    
+                    
                       # try to configure caps (may fail if for example specified interfaces are missing)
                       :local interfacesList "";
                       :local bFirst 1;
-
+                    
                       # wait for wireless interfaces
                       :while ([/interface wireless find] = "") do={
                         :if ($count = 30) do={
@@ -221,7 +224,7 @@
                         }
                         :delay 1s; :set count ($count + 1);
                       }
-
+                    
                       # delay just to make sure that all wireless interfaces are loaded
                       :delay 5s;
                       :foreach i in=[/interface wireless find] do={
@@ -236,19 +239,20 @@
                         /interface wireless cap
                           set enabled=yes interfaces=$interfacesList discovery-interfaces=$brName bridge=$brName
                       } on-error={ :log warning "$logPref unable to configure caps";}
-
+                    
                     }
-
+                    
                     :if ($action = "revert") do={
                       :do {
                         /interface wireless cap
                           set enabled=no interfaces="" discovery-interfaces="" bridge=none
                       } on-error={ :log warning "$logPref unable to unset caps";}
-
+                    
                       :local o [/ip dhcp-client find comment="defconf"]
                       :if ([:len $o] != 0) do={ /ip dhcp-client remove $o }
-
+                    
                       /interface bridge port remove [find comment="defconf"]
                       /interface bridge remove [find comment="defconf"]
-
+                    
                     }
+
